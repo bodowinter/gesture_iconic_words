@@ -1,0 +1,2616 @@
+---
+title: "Analysis of iconic words and gestures"
+author: "Bodo & Ell"
+date: '2023-03-21'
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true 
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This analysis is going to look at the count of gestures as a function whether the concomitant word is iconic or not.
+
+There are three main variables:
+
+- `gesture` yes/no, which includes *all* types gestures (iconic, deictic, beat, metaphoric)
+- `iconic_gesture` yes/no, which looks at whether those videos with a gesture also feature an iconic gesture
+- a third variable, `non_iconic_gesture`, which is gesture - iconic gesture is constructed in the script
+
+The models will not be computed in the markdown due to the long estimation time. This is why the code chunks will have `eval = FALSE` as setting. Instead, the pre-compiled models are loaded into R from the `models` folder.
+
+# Setup
+
+Let's load packages:
+
+```{r message = FALSE, warning = FALSE}
+# Load packages:
+
+library(tidyverse) # for data processing and visualization
+library(patchwork) # for multi-plot arrays
+library(brms) # for bayesian analysis
+library(effsize) # for Cohen's d effect size
+```
+
+For reproducibility, report version numbers:
+
+```{r}
+R.Version()$version.string
+
+packageVersion('tidyverse')
+packageVersion('patchwork')
+packageVersion('brms')
+```
+
+Load data:
+
+```{r message = FALSE, warning = FALSE}
+df <- read_csv('../data/ALL_videos_coded_18_06_24.csv')
+```
+
+Let's get rid of everything that doesn't have a number, which are the ones that have not been coded.
+
+```{r}
+df <- filter(df, !is.na(word_used))
+```
+
+Let's make the `word` column lowercase:
+
+```{r}
+df <- mutate(df, word = str_to_lower(word))
+```
+
+# Overview and exclusions
+
+Let's see for how many the word wasn't there?
+
+```{r}
+df |> 
+  count(word_used) |> 
+  mutate(proportion = n / sum(n))
+```
+
+Let's reduce the data frame to only those cases where `word_used` is equal to `1`.
+
+```{r}
+df <- filter(df, word_used == 1)
+```
+
+Let's do a count of the duplicates:
+
+```{r}
+df |> 
+  count(not_duplicate) |> 
+  mutate(proportion = n / sum(n))
+```
+
+Let's get rid of the duplicates:
+
+```{r}
+df <- filter(df, not_duplicate == 1)
+```
+
+Let's count whether the speaker was visible:
+
+```{r}
+df |> 
+  count(speaker_visible) |> 
+  mutate(proportion = n / sum(n))
+```
+
+Let's take only those for which the speaker is visible:
+
+```{r}
+df <- filter(df, speaker_visible == 1)
+```
+
+Let's count whether the hands were visible:
+
+```{r}
+df |> 
+  count(hands_visible) |> 
+  mutate(proportion = n / sum(n))
+```
+
+Let's take only those for which the hands are visible:
+
+```{r}
+df <- filter(df, hands_visible == 1)
+```
+
+Let's count whether the hands were free:
+
+```{r}
+df |> 
+  count(hands_free) |> 
+  mutate(proportion = n / sum(n))
+```
+
+The `0`'s here include only those cases for which it was clearly impossible for the speaker to gesture. So, we'll gesture.
+
+```{r}
+df <- filter(df, hands_free == 1)
+```
+
+Not 100% sure about this, but for now, let's make the `iconic_gesture` cases that have `0` for the `gesture` column into `NA`, just so we don't treat those as non-iconic gestures by accident.
+
+```{r}
+df <- mutate(df,
+             iconic_gesture = ifelse(gesture == 0, 0, iconic_gesture))
+```
+
+For plotting later, it makes sense to switch the `non_iconic` label to a less techy-looking `non-iconic`, and also change the order so that the `non-iconic` level then comes first:
+
+```{r}
+df <- mutate(df,
+             type = ifelse(type == 'non_iconic',
+                           'non-iconic \nword', 'iconic \nword'),
+             type = factor(type,
+                           levels = c('non-iconic \nword', 'iconic \nword')))
+```
+
+Let's check the count of words by itself:
+
+```{r}
+# Save the word counts:
+
+word_counts <- df |>
+  count(type, word, sort = TRUE)
+
+# Show:
+
+word_counts |>
+  print(n = Inf)
+```
+
+Create a `non_iconic_gesture` variable which is `gesture` minus `iconic_gesture`... this variable then specifically looks at all the cases of gestures that are not iconic.
+
+```{r}
+# Seed with NA values:
+
+df$non_iconic_gesture <- NA
+
+# Create variable:
+
+df <- mutate(df,
+             non_iconic_gesture = case_when(gesture == 1 & iconic_gesture == 0 ~ 'gesture (non-iconic)',
+                                            gesture == 0 & iconic_gesture == 0 ~ 'no gesture'))
+
+# Double check:
+
+df |> 
+  distinct(gesture, iconic_gesture, non_iconic_gesture) |> 
+  select(gesture, iconic_gesture, non_iconic_gesture)
+```
+
+That's correct.
+
+
+# Descriptive statistics
+
+Let's count the overall average gesture rate:
+
+```{r}
+# Save:
+
+gesture_counts <- df |> 
+  count(gesture) |> 
+  mutate(proportion = n / sum(n))
+
+# Show:
+
+gesture_counts
+```
+
+Let's count iconic gestures:
+
+```{r}
+# Save:
+
+iconic_counts <- df |> 
+  filter(gesture == 1) |> 
+  count(iconic_gesture) |> 
+  mutate(proportion = n / sum(n))
+
+# Show:
+
+iconic_counts
+```
+
+Let's count the overall gestures by word type:
+
+```{r}
+# Save:
+
+gesture_by_type_counts <- df |> 
+  count(type, gesture) |> 
+  group_by(type) |> 
+  mutate(proportion = n / sum(n))
+
+# Show:
+
+gesture_by_type_counts
+```
+
+Let's count the iconic gestures by word type:
+
+```{r}
+# Save:
+
+iconic_by_type_counts <- df |> 
+  filter(gesture == 1) |> 
+  count(type, iconic_gesture) |> 
+  group_by(type) |> 
+  mutate(proportion = n / sum(n))
+
+# Show:
+
+iconic_by_type_counts
+```
+
+Let's do the same again, but this time only for those that are not iconic gestures.
+
+```{r}
+# Save:
+
+other_by_type_counts <- df |> 
+  count(type, non_iconic_gesture) |> 
+  filter(!is.na(non_iconic_gesture)) |> 
+  group_by(type) |> 
+  mutate(proportion = n / sum(n))
+
+# Show:
+
+other_by_type_counts
+```
+
+Let's do both of these things on a word by word basis. Gesture counts first:
+
+```{r}
+# Save counts:
+
+word_gesture_rates <- df |> 
+  count(word, gesture) |> 
+  group_by(word) |> 
+  mutate(proportion = n / sum(n)) |> 
+  filter(gesture == 1) |> 
+  select(-gesture, -n)
+
+# Show:
+
+word_gesture_rates |> 
+  arrange(desc(proportion)) |> 
+  print(n = Inf)
+```
+
+Proportion of iconic gestures (out of videos with gesture) by word:
+
+```{r}
+# Save counts:
+
+word_iconic_gesture_rates <- df |> 
+  count(word, iconic_gesture) |> 
+  group_by(word) |> 
+  mutate(proportion = n / sum(n)) |> 
+  filter(iconic_gesture == 1) |> 
+  select(-iconic_gesture, -n)
+
+# Show:
+
+word_iconic_gesture_rates |> 
+  arrange(desc(proportion)) |> 
+  print(n = Inf)
+```
+
+Proportion of other gestures (out of all videos, excluding non-iconic gestures) by word:
+
+```{r}
+# Save counts:
+
+other_gesture_rates <- df |> 
+  count(word, non_iconic_gesture) |> 
+  group_by(word) |> 
+  mutate(proportion = n / sum(n)) |> 
+  filter(non_iconic_gesture == 'gesture (non-iconic)') |> 
+  select(-non_iconic_gesture, -n)
+
+# Show:
+
+other_gesture_rates |> 
+  arrange(desc(proportion)) |> 
+  print(n = Inf)
+```
+
+Let's merge the counts and the proportions into a big table showing everything on a by-word basis:
+
+```{r}
+# Save:
+
+by_word_all <- left_join(word_counts, word_gesture_rates) |> 
+  rename(gesture_proportion = proportion) |> 
+  left_join(word_iconic_gesture_rates) |> 
+  rename(iconic_gesture_proportion = proportion) |> 
+  left_join(other_gesture_rates) |> 
+  rename(other_proportion = proportion) |> 
+  mutate(type = str_replace(type, '\n', ''),
+         type = factor(type, levels = c('non-iconic word', 'iconic word')))
+
+# Show:
+
+by_word_all |> 
+  print(n = Inf)
+```
+
+The `NA`'s in this table are true zeros, so they should be replaced with 0 proportion.
+
+```{r}
+by_word_all <- mutate(by_word_all,
+                      gesture_proportion = ifelse(is.na(gesture_proportion),
+                                                  0, gesture_proportion),
+                      iconic_gesture_proportion = ifelse(is.na(iconic_gesture_proportion),
+                                                         0, iconic_gesture_proportion),
+                      other_proportion = ifelse(is.na(other_proportion),
+                                                0, other_proportion))
+
+# Show again:
+
+by_word_all |> 
+  print(n = Inf)
+
+# Save outside of R:
+
+by_word_all |> 
+  write_csv('../data/by_word_proportions.csv')
+```
+
+# Data visualization
+
+Let's make a bar plot of the gesture counts:
+
+```{r}
+# Basic plot:
+
+gesture_p <- gesture_by_type_counts |> 
+  mutate(gesture = ifelse(gesture == 1, 'gesture', 'no gesture')) |> 
+  mutate(gesture = factor(gesture,
+                          levels = c('no gesture', 'gesture'))) |> 
+  ggplot(aes(x = type,
+             y = proportion,
+             fill = gesture)) +
+  geom_col(width = 0.55)
+
+# Axes and labels:
+
+gesture_p <- gesture_p +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(NULL) +
+  ylab('Proportion')
+
+# Look and feel:
+
+gesture_p <- gesture_p +
+  theme_classic()
+
+# Show:
+
+gesture_p
+```
+
+Same for iconic gestures only:
+
+```{r}
+# Basic plot:
+
+iconic_p <- iconic_by_type_counts |> 
+  mutate(iconic_gesture = ifelse(iconic_gesture == 1,
+                                 'iconic gesture',
+                                 'other gesture')) |> 
+  mutate(iconic_gesture = factor(iconic_gesture,
+                                 levels = c('other gesture', 'iconic gesture'))) |> 
+  ggplot(aes(x = type,
+             y = proportion,
+             fill = iconic_gesture)) +
+  geom_col(width = 0.55)
+
+# Axes and labels:
+
+iconic_p <- iconic_p +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(NULL) +
+  ylab('Proportion')
+
+# Look and feel:
+
+iconic_p <- iconic_p +
+  theme_classic()
+
+# Show:
+
+iconic_p
+```
+
+Same for other types of gestures only. This will be the rightmost plot in our multiple plot array. For this reason we change the variable to the levels `yes` and `no` because then those levels can serve as legend for all three plots (yes gesture vs. no gesture, yes iconic versus no iconic etc.)
+
+```{r}
+# Basic plot:
+
+other_p <- other_by_type_counts |> 
+  mutate(non_iconic_gesture = ifelse(non_iconic_gesture == 'no gesture',
+                                     'no', 'yes'),
+         non_iconic_gesture = factor(non_iconic_gesture,
+                                     levels = c('no', 'yes'))) |> 
+  ggplot(aes(x = type,
+             y = proportion,
+             fill = non_iconic_gesture)) +
+  geom_col(width = 0.55)
+
+# Axes and labels:
+
+other_p <- other_p +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  scale_y_continuous(expand = c(0, 0)) +
+  xlab(NULL) +
+  ylab('Proportion')
+
+# Look and feel:
+
+other_p <- other_p +
+  theme_classic()
+
+# Show:
+
+other_p
+```
+
+Put them all into a three-column plot array, using the `patchwork` library. But we should then also 
+
+```{r}
+# Add titles and switch off legends except for the last one:
+
+gesture_p <- gesture_p +
+  ggtitle('a) All gestures') +
+  theme(legend.position = 'none',
+        plot.caption = element_text(hjust = 0))
+
+iconic_p <- iconic_p +
+  ggtitle('b) Iconic gestures') +
+  theme(legend.position = 'none',
+        plot.caption = element_text(hjust = 0)) +
+  ylab(NULL)
+
+other_p <- other_p +
+  ggtitle('c) Other gestures') +
+  ylab(NULL) +
+  theme(plot.caption = element_text(hjust = 0))
+
+# Combine:
+
+three_p <- gesture_p + iconic_p + other_p +
+  plot_layout(ncol = 3)
+
+# Save combined plot outside:
+
+ggsave(plot = three_p, filename = '../figures/barplots.pdf',
+       width = 7, height = 3.5)
+```
+
+Let's make a density plot out of this, `gesture_proportion`:
+
+```{r}
+# Plot basics:
+
+ges_prop_p <- by_word_all |> 
+  ggplot(aes(x = gesture_proportion, fill = type)) +
+  geom_density(alpha = 0.5)
+
+# Axes and labels:
+
+ges_prop_p <- ges_prop_p +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 3),
+                     breaks = seq(0, 3, 0.5)) +
+  scale_x_continuous(expand = c(0, 0),
+                     limits = c(0, 1),
+                     breaks = seq(0, 1, 0.25)) +
+  xlab('Gesture proportion of each word') +
+  ylab('Density')
+
+# Themes:
+
+ges_prop_p <- ges_prop_p +
+  theme_classic() +
+  theme(legend.position = 'bottom') +
+  ggtitle('a) Proportion of all gestures\nacross words')
+
+# Show:
+
+ges_prop_p
+```
+
+Let's make a density plot out of this, `gesture_proportion`:
+
+```{r}
+# Plot basics:
+
+icon_prop_p <- by_word_all |> 
+  ggplot(aes(x = iconic_gesture_proportion, fill = type)) +
+  geom_density(alpha = 0.5)
+
+# Axes and labels:
+
+icon_prop_p <- icon_prop_p +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 3),
+                     breaks = seq(0, 3, 0.5)) +
+  scale_x_continuous(expand = c(0, 0),
+                     limits = c(0, 1),
+                     breaks = seq(0, 1, 0.25)) +
+  xlab('Iconic gesture proportion of each word') +
+  ylab('Density')
+
+# Themes:
+
+icon_prop_p <- icon_prop_p +
+  theme_classic() +
+  theme(legend.position = 'bottom') +
+  ggtitle('b) Proportion of iconic gestures\nacross words')
+
+# Show:
+
+icon_prop_p
+```
+
+Proportion of other gestures:
+
+```{r}
+# Plot basics:
+
+other_prop_p <- by_word_all |> 
+  ggplot(aes(x = other_proportion, fill = type)) +
+  geom_density(alpha = 0.5)
+
+# Axes and labels:
+
+other_prop_p <- other_prop_p +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 3),
+                     breaks = seq(0, 3, 0.5)) +
+  scale_x_continuous(expand = c(0, 0),
+                     limits = c(0, 1),
+                     breaks = seq(0, 1, 0.25)) +
+  xlab('Other gesture proportion of each word') +
+  ylab('Density')
+
+# Themes:
+
+other_prop_p <- other_prop_p +
+  theme_classic() +
+  theme(legend.position = 'bottom') +
+  ggtitle('c) Proportion of any other gestures\nacross words')
+
+# Show:
+
+other_prop_p
+```
+
+Put all three density plots into one big plot:
+
+```{r}
+# Add titles and switch off legends except for the last one:
+
+ges_prop_p <- ges_prop_p +
+  theme(legend.position = 'none',
+        plot.caption = element_text(hjust = 0))
+
+icon_prop_p <- icon_prop_p +
+  theme(legend.position = 'none',
+        plot.caption = element_text(hjust = 0)) +
+  ylab(NULL)
+
+other_prop_p <- other_prop_p +
+  ylab(NULL) +
+  theme(plot.caption = element_text(hjust = 0))
+
+# Combine:
+
+three_prop_p <- ges_prop_p + icon_prop_p + other_prop_p +
+  plot_layout(ncol = 3)
+
+# Save combined plot outside:
+
+ggsave(plot = three_prop_p, filename = '../figures/density_plots.pdf',
+       width = 12, height = 3.5)
+```
+
+Let's see whether we can do a bar plot of all the words for `gesture_proportion`:
+
+```{r}
+# Plot basics:
+
+word_bars_p <- by_word_all |> 
+  ggplot(aes(x = reorder(word, gesture_proportion),
+             y = gesture_proportion, fill = type)) +
+  geom_col(width = 0.75) +
+  geom_text(aes(label = n),
+            nudge_y = +0.025,
+            size = 2.7)
+
+# Axes and labels:
+
+word_bars_p <- word_bars_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.1)) +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  ylab('Proportion of videos with gesture') +
+  xlab(NULL)
+
+# Look and feel:
+
+word_bars_p <- word_bars_p +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = 'bottom')
+
+# Show:
+
+word_bars_p
+
+# Save:
+
+ggsave(plot = word_bars_p, filename = '../figures/by_word_bars.pdf',
+       width = 10, height = 4)
+```
+
+Same for `iconic_gesture_proportion`:
+
+```{r}
+# Plot basics:
+
+iconic_bars_p <- by_word_all |> 
+  ggplot(aes(x = reorder(word, iconic_gesture_proportion),
+             y = iconic_gesture_proportion, fill = type)) +
+  geom_col(width = 0.75) +
+  geom_text(aes(label = n),
+            nudge_y = +0.025,
+            size = 2.7)
+
+# Axes and labels:
+
+iconic_bars_p <- iconic_bars_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.1)) +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  ylab('Proportion of gestures that are iconic') +
+  xlab(NULL)
+
+# Look and feel:
+
+iconic_bars_p <- iconic_bars_p +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = 'bottom')
+
+# Show:
+
+iconic_bars_p
+
+# Save:
+
+ggsave(plot = iconic_bars_p, filename = '../figures/by_word_iconic_bars.pdf',
+       width = 10, height = 4)
+```
+
+Same for other:
+
+Same for `iconic_gesture_proportion`:
+
+```{r}
+# Plot basics:
+
+other_bars_p <- by_word_all |> 
+  ggplot(aes(x = reorder(word, other_proportion),
+             y = other_proportion, fill = type)) +
+  geom_col(width = 0.75) +
+  geom_text(aes(label = n),
+            nudge_y = +0.025,
+            size = 2.7)
+
+# Axes and labels:
+
+other_bars_p <- other_bars_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.1)) +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  ylab('Proportion of videos with non-iconic gestures') +
+  xlab(NULL)
+
+# Look and feel:
+
+other_bars_p <- other_bars_p +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = 'bottom')
+
+# Show:
+
+other_bars_p
+
+# Save:
+
+ggsave(plot = other_bars_p, filename = '../figures/by_word_other_bars.pdf',
+       width = 10, height = 4)
+```
+
+# Inferential statistics
+
+## Build models
+
+Specify weakly informative priors, specifically for the beta coefficient, using the recommendation by Gelman et al. (2008) to specify a Cauchy prior centered at 0 with scale 2.5.
+
+```{r}
+weak_priors <- c(prior(student_t(3, 0, 2.5), class = Intercept),
+                 prior(student_t(3, 0, 2.5), class = sd),
+                 prior(cauchy(0, 2.5), class = b)) # Gelman et al. (2008)
+```
+
+Let's fit a model with a fixed effect of `type`, and random intercepts for `word` and `url` because we have multiple data points for each of these grouping factors. We cannot fit `type` random slopes here because there is no possible variation whatsoever of type within `word` or `url` since each word or video is always either iconic or not iconic.
+
+```{r eval = FALSE}
+gesture_mdl <- brm(gesture ~
+                     
+                     # Fixed effects:
+                     
+                     1 + type +
+                     
+                     # Random effects:
+                     
+                     (1|word) + (1|url),
+                   
+                   # More model specs:
+                   
+                   prior = weak_priors,
+                   family = bernoulli,
+                   data = df,
+                   
+                   # MCMC estimation specs:
+                   
+                   seed = 42, cores = 4,
+                   iter = 4000, warmup = 2000)
+
+# Save:
+
+save(gesture_mdl, file = '../models/gesture_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load:
+
+load('../models/gesture_mdl.Rdata')
+
+# Show:
+
+gesture_mdl
+```
+
+Show the priors just to double check:
+
+```{r}
+prior_summary(gesture_mdl)
+```
+
+Show the posterior:
+
+```{r}
+gesture_mdl_posts <- posterior_samples(gesture_mdl)
+```
+
+Make a plot of the posterior distribution of the `type` coefficient:
+
+```{r}
+# Plot basics:
+
+gesture_posts_p <- gesture_mdl_posts |> 
+  ggplot(aes(x = b_typeiconicDnword)) +
+  geom_density(fill = 'purple3') +
+  geom_vline(xintercept = 0, linetype = 'dashed')
+
+# Axes and labels:
+
+gesture_posts_p <- gesture_posts_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.2),
+                     breaks = seq(0, 1.2, 0.2)) +
+  scale_x_continuous(limits = c(-3, 3),
+                     breaks = seq(-3, 3, 1))
+
+# Look and feel:
+
+gesture_posts_p <- gesture_posts_p +
+  ylab('Density of posterior samples') +
+  xlab('Posterior estimate of coefficient') +
+  theme_classic()
+
+# Show and save:
+
+gesture_posts_p
+ggsave(plot = gesture_posts_p, filename = '../figures/gesture_posterior.pdf',
+       width = 4.7, height = 3)
+```
+
+This shows that given the model formula, prior, and data, most of the plausible `type` effects are positive, which means that it is more plausible that iconic words also co-occur with gesture. Since the posterior distribution crosses over zero, it is *possible* that the effect could be negative, but this is quite improbable given where the bulk of the posterior distribution lies.
+
+This is to calculate the actual posterior probability of the effect being positive (= of the same sign), which is essentially just pinning a number to what proportion of the area in the distribution above is to the right of the dashed line.
+
+```{r}
+hypothesis(gesture_mdl, 'typeiconicDnword > 0')
+```
+
+Same for iconic gestures:
+
+```{r eval = FALSE}
+iconic_mdl <- brm(iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + type +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = df,
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(iconic_mdl, file = '../models/iconic_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/iconic_mdl.RData')
+
+# Show model:
+
+iconic_mdl
+```
+
+Show the priors to double-check:
+
+```{r}
+prior_summary(iconic_mdl)
+```
+
+Show the posterior of the `type` coefficient. First, extract the posterior samples:
+
+```{r}
+iconic_mdl_posts <- posterior_samples(iconic_mdl)
+```
+
+Make a plot of the posterior distribution of the coefficient:
+
+```{r}
+# Plot basics:
+
+iconic_posts_p <- iconic_mdl_posts |> 
+  ggplot(aes(x = b_typeiconicDnword)) +
+  geom_density(fill = 'purple3') +
+  geom_vline(xintercept = 0, linetype = 'dashed')
+
+# Axes and labels:
+
+iconic_posts_p <- iconic_posts_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.2),
+                     breaks = seq(0, 1.2, 0.2)) +
+  scale_x_continuous(limits = c(-3, 3),
+                     breaks = seq(-3, 3, 1))
+
+# Look and feel:
+
+iconic_posts_p <- iconic_posts_p +
+  ylab('Density of posterior samples') +
+  xlab('Posterior estimate of coefficient') +
+  theme_classic()
+
+# Show and save:
+
+iconic_posts_p
+ggsave(plot = iconic_posts_p, filename = '../figures/iconic_gesture_posterior.pdf',
+       width = 4.7, height = 3)
+```
+
+Check whether the main effect of iconicity is likely to be of the same sign. This is the posterior probability of iconic words having a higher gesture rate:
+
+```{r}
+hypothesis(iconic_mdl, 'typeiconicDnword > 0')
+```
+
+The final model is the one with only the non-iconic gestures:
+
+Same for non-iconic (= "other") gestures:
+
+```{r eval = FALSE}
+other_mdl <- brm(non_iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + type +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = filter(df, !is.na(non_iconic_gesture)),
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(other_mdl, file = '../models/other_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/other_mdl.RData')
+
+# Show model:
+
+other_mdl
+```
+
+Show the priors to double-check:
+
+```{r}
+prior_summary(other_mdl)
+```
+
+Show the posterior of the `type` coefficient. First, extract the posterior samples:
+
+```{r}
+other_mdl_posts <- posterior_samples(other_mdl)
+```
+
+Make a plot of the posterior distribution of the coefficient:
+
+```{r}
+# Plot basics:
+
+other_posts_p <- other_mdl_posts |> 
+  ggplot(aes(x = b_typeiconicDnword)) +
+  geom_density(fill = 'purple3') +
+  geom_vline(xintercept = 0, linetype = 'dashed')
+
+# Axes and labels:
+
+other_posts_p <- other_posts_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.2),
+                     breaks = seq(0, 1.2, 0.2)) +
+  scale_x_continuous(limits = c(-3, 3),
+                     breaks = seq(-3, 3, 1))
+
+# Look and feel:
+
+other_posts_p <- other_posts_p +
+  ylab('Density of posterior samples') +
+  xlab('Posterior estimate of coefficient') +
+  theme_classic()
+
+# Show and save:
+
+other_posts_p
+ggsave(plot = other_posts_p, filename = '../figures/other_gesture_posterior.pdf',
+       width = 4.7, height = 3)
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(other_mdl, 'typeiconicDnword < 0')
+```
+
+## Posterior predictive checks
+
+To assess whether the models make reasonable assumptions about the underlying data-generating processes, we can simulate new data.
+
+Regular bar plots:
+
+```{r}
+# Any gesture model:
+
+pp_check(gesture_mdl, type = "bars", ndraws = 100)
+
+# Iconic gesture model:
+
+pp_check(iconic_mdl, type = "bars", ndraws = 100)
+
+# Other gesture model:
+
+pp_check(other_mdl, type = "bars", ndraws = 100)
+```
+
+Grouped bar plots:
+
+```{r}
+# Any gesture model:
+
+pp_check(gesture_mdl, type = "bars_grouped", ndraws = 100,
+         group = 'word')
+ggsave('../figures/gesture_mdl_pp_check.pdf',
+       width = 14, height = 12)
+
+# Iconic gesture model:
+
+pp_check(iconic_mdl, type = "bars_grouped", ndraws = 100,
+         group = 'word')
+ggsave('../figures/iconic_mdl_pp_check.pdf',
+       width = 14, height = 12)
+
+# Other gesture model:
+
+pp_check(other_mdl, type = "bars_grouped", ndraws = 100,
+         group = 'word')
+ggsave('../figures/other_mdl_pp_check.pdf',
+       width = 14, height = 12)
+```
+
+ECDF (empirical cumulative distribution function):
+
+```{r}
+# Any gesture model:
+
+pp_check(gesture_mdl, type = "ecdf_overlay", ndraws = 100)
+
+# Iconic gesture model:
+
+pp_check(iconic_mdl, type = "ecdf_overlay", ndraws = 100)
+
+# Other gesture model:
+
+pp_check(other_mdl, type = "ecdf_overlay", ndraws = 100)
+```
+
+This completes this analysis.
+
+# Incorporating frequency and POS
+
+## Merge data into main data
+
+As it has been found that frequency influences gesture production rates, let's incorporate that:
+
+```{r warning = FALSE, message = FALSE}
+# load, rename, and log-transform
+
+SUBTL <- read_csv('../data/SUBTLEX_US_with_POS.csv') |> 
+  rename(freq = FREQcount) |> 
+  mutate(log_freq = log10(freq))
+```
+
+Merge this into `by_word_all`:
+
+```{r}
+by_word_all <- left_join(by_word_all,
+                         select(SUBTL, Word, freq, log_freq),
+                         by = c('word' = 'Word'))
+```
+
+## Descriptive statistics & data visualization
+
+Are iconic words different from non-iconic ones in terms of frequency?
+
+```{r}
+by_word_all |> 
+  mutate(type = as.character(type),
+         type = if_else(type == 'non-iconic word', 'minimally iconic\nword', 'highly iconic\nword'),
+         type = factor(type, levels = c('minimally iconic\nword', 'highly iconic\nword'))) |> 
+  ggplot(aes(x = type, y = log_freq, fill = type)) +
+  geom_boxplot(width = 0.5) +
+  scale_fill_manual(values = c('steelblue', 'goldenrod3'),
+                    name = '') +
+  xlab(NULL) +
+  ylab('Log10 frequency') +
+  scale_y_continuous(limits = c(0, 5)) +
+  theme_classic() +
+  theme(legend.position = 'none') +
+  theme(axis.text.x = element_text(size = 10, face = 'bold'),
+        axis.title.y = element_text(margin = margin(r = 15),
+                                    size = 12, face = 'bold'))
+
+ggsave(filename = '../figures/barplot_frequency_difference.pdf',
+       width = 3.5, height = 4.2)
+```
+
+Looks like a big difference. Check the raw frequency and log frequency descriptive stats difference:
+
+```{r}
+by_word_all |> 
+  group_by(type) |> 
+  summarize(freq_M = mean(freq, na.rm = TRUE),
+            log_freq_M = mean(log_freq, na.rm = TRUE))
+```
+
+Check how big this difference is in terms of effect size (Cohen's d):
+
+```{r}
+cohen.d(log_freq ~ type, data = by_word_all)
+```
+
+Large effect size.
+
+Quickly check whether frequency is correlated with any of the gesture rates, using Spearman's rho, because these are proportions (but it doesn't really matter, and Pearson's r would be fine as well):
+
+```{r}
+with(by_word_all, cor.test(log_freq, gesture_proportion, method = 'spearman'))
+with(by_word_all, cor.test(log_freq, iconic_gesture_proportion, method = 'spearman'))
+with(by_word_all, cor.test(log_freq, other_proportion, method = 'spearman'))
+```
+
+Perhaps Pearson's r correlations are easier to interpret:
+
+```{r}
+with(by_word_all, cor.test(log_freq, gesture_proportion, method = 'pearson'))
+with(by_word_all, cor.test(log_freq, iconic_gesture_proportion, method = 'pearson'))
+with(by_word_all, cor.test(log_freq, other_proportion, method = 'pearson'))
+```
+
+Not much of any correlations at all. I'd perhaps report these as these are really easy to understand by many people, making it clear that these are on by-word averages.
+
+Make a plot of this, also incorporating word iconicity (`type`). For heuristic purposes we'll also add a linear model to see whether we can spot any obvious relations that differ between iconic and non-iconic words:
+
+```{r}
+by_word_all |> 
+  ggplot(aes(x = log_freq, y = gesture_proportion,
+             color = type, label = word)) +
+  geom_text() +
+  xlab('Log frequency') +
+  ylab('Gesture proportion') +
+  # geom_smooth(method = 'lm') +
+  scale_color_manual(values = c('steelblue', 'goldenrod3'),
+                     name = '') +
+  theme_classic() +
+  theme(legend.position = 'bottom',
+        axis.title = element_text(size = 12, face = 'bold'),
+        axis.title.y = element_text(margin = margin(r = 15)),
+        axis.title.x = element_text(margin = margin(t = 12)))
+
+# Save:
+
+ggsave('../figures/by_word_correlation_frequency_gesture_proportion.pdf',
+       width = 6.5, height = 5)
+```
+
+The massive overlap and wide scatter suggests that there's not much of a relation.
+
+```{r}
+by_word_all |> 
+  ggplot(aes(x = log_freq, y = iconic_gesture_proportion,
+             color = type, label = word)) +
+  geom_text() +
+  xlab('Log frequency') +
+  ylab('Iconic gesture proportion') +
+  # geom_smooth(method = 'lm') +
+  scale_color_manual(values = c('steelblue', 'goldenrod3'),
+                     name = '') +
+  theme_classic() +
+  theme(legend.position = 'bottom')
+
+# Save:
+
+ggsave('../figures/by_word_correlation_frequency_iconic_gesture_proportion.pdf',
+       width = 6.5, height = 5)
+```
+
+Very weak positive relationship with more frequent words being more iconically gestured.
+
+## Frequency models
+
+What happens if we incorporate frequency into the main analysis? For this we also need to add it to `df`:
+
+```{r}
+df <- left_join(df, select(SUBTL, Word, freq, log_freq),
+                by = c('word' = 'Word'))
+```
+
+The model has problems if `type` contains the paragraph break we included above for data viz purposes.
+
+```{r}
+df <- mutate(df,
+             type = as.character(type),
+             type = ifelse(type == 'non-iconic \nword',
+                           'non_iconic',
+                           'iconic'),
+             type = factor(type, levels = c('non_iconic', 'iconic')))
+```
+
+Check:
+
+```{r eval = FALSE}
+gesture_freq_mdl <- brm(gesture ~
+                     
+                     # Fixed effects:
+                     
+                     1 + type + log_freq +
+                     
+                     # Random effects:
+                     
+                     (1|word) + (1|url),
+                   
+                   # More model specs:
+                   
+                   prior = weak_priors,
+                   family = bernoulli,
+                   data = df,
+                   
+                   # MCMC estimation specs:
+                   
+                   seed = 42, cores = 4,
+                   iter = 4000, warmup = 2000)
+
+# Save:
+
+save(gesture_freq_mdl, file = '../models/gesture_freq_mdl.RData')
+```
+
+Load:
+
+```{r}
+load('../models/gesture_freq_mdl.RData')
+```
+
+Show model:
+
+```{r}
+gesture_freq_mdl
+```
+
+Check effects:
+
+```{r}
+hypothesis(gesture_freq_mdl, 'typeiconic > 0')
+hypothesis(gesture_freq_mdl, 'log_freq > 0')
+```
+
+Same for iconic gestures:
+
+```{r eval = FALSE}
+iconic_freq_mdl <- brm(iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + type + log_freq +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = df,
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(iconic_freq_mdl, file = '../models/iconic_freq_mdl.RData')
+```
+
+Load:
+
+```{r}
+load('../models/iconic_freq_mdl.RData')
+```
+
+Show model:
+
+```{r}
+iconic_freq_mdl
+```
+
+Check effects:
+
+```{r}
+hypothesis(iconic_freq_mdl, 'typeiconic > 0')
+hypothesis(iconic_freq_mdl, 'log_freq > 0')
+```
+
+Next look at other:
+
+```{r eval = FALSE}
+other_freq_mdl <- brm(non_iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + type + log_freq +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = filter(df, !is.na(non_iconic_gesture)),
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(other_freq_mdl, file = '../models/other_freq_mdl.RData')
+```
+
+Load:
+
+```{r}
+load('../models/other_freq_mdl.RData')
+```
+
+Show model:
+
+```{r}
+other_freq_mdl
+```
+
+Check effects:
+
+```{r}
+hypothesis(other_freq_mdl, 'typeiconic < 0')
+hypothesis(other_freq_mdl, 'log_freq > 0')
+```
+
+## Posterior distributions
+
+Show the posterior:
+
+```{r}
+gesture_mdl_posts <- posterior_samples(gesture_freq_mdl)
+```
+
+Make a plot of the posterior distribution of the `type` coefficient:
+
+```{r}
+# Plot basics:
+
+gesture_posts_p <- gesture_mdl_posts |> 
+  ggplot(aes(x = b_typeiconic)) +
+  geom_density(fill = 'purple3') +
+  geom_vline(xintercept = 0, linetype = 'dashed')
+
+# Axes and labels:
+
+gesture_posts_p <- gesture_posts_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.2),
+                     breaks = seq(0, 1.2, 0.2)) +
+  scale_x_continuous(limits = c(-3.5, 3.5),
+                     breaks = seq(-3, 3, 1))
+
+# Look and feel:
+
+gesture_posts_p <- gesture_posts_p +
+  ylab('Density') +
+  xlab('Posterior estimate') +
+  theme_classic()
+
+# Show and save:
+
+gesture_posts_p
+ggsave(plot = gesture_posts_p, filename = '../figures/gesture_posterior_with_freq.pdf',
+       width = 4.7, height = 3)
+```
+
+Show the posterior of the `type` coefficient. First, extract the posterior samples:
+
+```{r}
+iconic_mdl_posts <- posterior_samples(iconic_freq_mdl)
+```
+
+Make a plot of the posterior distribution of the coefficient:
+
+```{r}
+# Plot basics:
+
+iconic_posts_p <- iconic_mdl_posts |> 
+  ggplot(aes(x = b_typeiconic)) +
+  geom_density(fill = 'purple3') +
+  geom_vline(xintercept = 0, linetype = 'dashed')
+
+# Axes and labels:
+
+iconic_posts_p <- iconic_posts_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.2),
+                     breaks = seq(0, 1.2, 0.2)) +
+  scale_x_continuous(limits = c(-3.5, 3.5),
+                     breaks = seq(-3, 3, 1))
+
+# Look and feel:
+
+iconic_posts_p <- iconic_posts_p +
+  ylab('Density of posterior samples') +
+  xlab('Posterior estimate') +
+  theme_classic()
+
+# Show and save:
+
+iconic_posts_p
+ggsave(plot = iconic_posts_p, filename = '../figures/iconic_gesture_posterior_with_freq.pdf',
+       width = 4.7, height = 3)
+```
+
+
+Show the posterior of the `type` coefficient. First, extract the posterior samples:
+
+```{r}
+other_mdl_posts <- posterior_samples(other_freq_mdl)
+```
+
+Make a plot of the posterior distribution of the coefficient:
+
+```{r}
+# Plot basics:
+
+other_posts_p <- other_mdl_posts |> 
+  ggplot(aes(x = b_typeiconic)) +
+  geom_density(fill = 'purple3') +
+  geom_vline(xintercept = 0, linetype = 'dashed')
+
+# Axes and labels:
+
+other_posts_p <- other_posts_p +
+  scale_y_continuous(expand = c(0, 0),
+                     limits = c(0, 1.2),
+                     breaks = seq(0, 1.2, 0.2)) +
+  scale_x_continuous(limits = c(-3.5, 3.5),
+                     breaks = seq(-3, 3, 1))
+
+# Look and feel:
+
+other_posts_p <- other_posts_p +
+  ylab('Density of posterior samples') +
+  xlab('Posterior estimate') +
+  theme_classic()
+
+# Show and save:
+
+other_posts_p
+ggsave(plot = other_posts_p, filename = '../figures/other_gesture_posterior_with_freq.pdf',
+       width = 4.7, height = 3)
+```
+
+Put them all together into one plot:
+
+```{r}
+gesture_posts_p <- gesture_posts_p +
+  ggtitle('a) Any gestures') +
+  theme(plot.title = element_text(face = 'bold', size = 12))
+
+iconic_posts_p <- iconic_posts_p + ylab(NULL) +
+  ggtitle('b) Iconic gestures') +
+  theme(plot.title = element_text(face = 'bold', size = 12))
+
+other_posts_p <- other_posts_p + ylab(NULL) +
+  ggtitle('c) Non-iconic gestures') +
+  theme(plot.title = element_text(face = 'bold', size = 12))
+
+three_p <- gesture_posts_p + plot_spacer() + iconic_posts_p + plot_spacer() + other_posts_p +
+  plot_layout(widths = c(4, 0.1, 4, 0.1, 4))
+
+ggsave(plot = three_p,
+       filename = '../figures/all_posteriors_with_frequency.pdf',
+       width = 9.5, height = 2.5)
+```
+
+# POS effect
+
+First, count how many unique adjectives and verbs there are:
+
+```{r}
+distinct(df, word, POS) |> 
+  count(POS)
+```
+
+Check the average proportion of all gestures, separately for high/low iconicity and POS:
+
+```{r}
+df |> 
+  count(POS, type, gesture) |> 
+  group_by(POS, type) |> 
+  mutate(proportion = n / sum(n),
+         percentage = str_c(round(proportion, 3) * 100, '%'))
+```
+
+Next, iconic gestures:
+
+```{r}
+df |> 
+  count(POS, type, iconic_gesture) |> 
+  filter(!is.na(iconic_gesture)) |> 
+  group_by(POS, type) |> 
+  mutate(proportion = n / sum(n),
+         percentage = str_c(round(proportion, 3) * 100, '%'))
+```
+
+Next, all other gestures:
+
+```{r}
+df |> 
+  count(POS, type, non_iconic_gesture) |> 
+  filter(!is.na(non_iconic_gesture)) |> 
+  group_by(POS, type) |> 
+  mutate(proportion = n / sum(n),
+         percentage = str_c(round(proportion, 3) * 100, '%'))
+```
+
+Let's fit a model with a fixed effect of `type`, and now added to this the POS effect, and random intercepts for `word` and `url` because we have multiple data points for each of these grouping factors. We cannot fit `type` random slopes here because there is no possible variation whatsoever of type within `word` or `url` since each word or video is always either iconic or not iconic.
+
+This time around, it makes sense to sum-code POS and type (dummy codes of -1, +1) so that we can interpret main effects in the presence of interactions more easily.
+
+```{r}
+# Make into factor:
+
+df <- mutate(df,
+             type_c = factor(type, levels = c('iconic \nword', 'non-iconic \nword')),
+             POS_c = factor(POS, levels = c('verb', 'adjective')))
+
+# Add sum-coding contrast coding scheme for 2 categories:
+
+contrasts(df$type_c) <- contr.sum(2)
+contrasts(df$POS_c) <- contr.sum(2)
+
+# Check:
+
+contrasts(df$type_c)
+contrasts(df$POS_c)
+```
+
+Now, fit the model:
+
+```{r eval = FALSE}
+gesture_POS_mdl <- brm(gesture ~
+                     
+                     # Fixed effects:
+                     
+                     1 + type_c + POS_c + type_c:POS_c +
+                     
+                     # Random effects:
+                     
+                     (1|word) + (1|url),
+                   
+                   # More model specs:
+                   
+                   prior = weak_priors,
+                   family = bernoulli,
+                   data = df,
+                   
+                   # MCMC estimation specs:
+                   
+                   seed = 42, cores = 4,
+                   iter = 4000, warmup = 2000)
+
+# Save:
+
+save(gesture_POS_mdl, file = '../models/gesture_POS_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load:
+
+load('../models/gesture_POS_mdl.Rdata')
+
+# Show:
+
+gesture_POS_mdl
+```
+
+This is to calculate the actual posterior probability of the effect being positive (= of the same sign), which is essentially just pinning a number to what proportion of the area in the distribution above is to the right of the dashed line.
+
+```{r}
+hypothesis(gesture_POS_mdl, 'type_c1 > 0')
+hypothesis(gesture_POS_mdl, 'POS_c1 > 0')
+hypothesis(gesture_POS_mdl, 'type_c1:POS_c1 > 0')
+```
+
+Same for iconic gestures:
+
+```{r eval = FALSE}
+iconic_POS_mdl <- brm(iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + type_c + POS_c + type_c:POS_c +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = df,
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(iconic_POS_mdl, file = '../models/iconic_POS_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/iconic_POS_mdl.RData')
+
+# Show model:
+
+iconic_POS_mdl
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(iconic_POS_mdl, 'type_c1 > 0')
+hypothesis(iconic_POS_mdl, 'POS_c1 > 0')
+hypothesis(iconic_POS_mdl, 'type_c1:POS_c1 > 0')
+```
+
+The final model is the one with only the non-iconic gestures:
+
+Same for non-iconic (= "other") gestures:
+
+```{r eval = FALSE}
+other_POS_mdl <- brm(non_iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + type_c + POS_c + type_c:POS_c +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = filter(df, !is.na(non_iconic_gesture)),
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(other_POS_mdl, file = '../models/other_POS_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/other_POS_mdl.RData')
+
+# Show model:
+
+other_POS_mdl
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(other_POS_mdl, 'type_c1 < 0')
+hypothesis(other_POS_mdl, 'POS_c1 < 0')
+hypothesis(other_POS_mdl, 'type_c1:POS_c1 < 0')
+```
+
+# Incorporating modality differences
+
+## Merge data into main data
+
+Load Lancaster data:
+
+```{r message = FALSE, warning = FALSE}
+lanc <- read_csv('../data/Lancaster_sensorimotor_norms_for_39707_words.csv')
+
+# Show:
+
+lanc
+```
+
+There are only dominant auditory, gustatory, haptic, and visual words for the iconic words, so we'll extract the perceptual strength measures only for that and for olfaction to complete the five senses.
+
+Make `Word` lowercase, both in the column name and in the actual content of the column:
+
+```{r}
+lanc <- lanc |> 
+  rename(word = Word,
+         dominant_modality = Dominant.perceptual,
+         dominant_action = Dominant.action,
+         auditory_strength = Auditory.mean,
+         visual_strength = Visual.mean,
+         haptic_strength = Haptic.mean,
+         gustatory_strength = Gustatory.mean,
+         olfactory_strength = Olfactory.mean,
+         hand_arm_mean = Hand_arm.mean,
+         max_strength = Max_strength.perceptual,
+         head_mean = Head.mean,
+         foot_leg_mean = Foot_leg.mean,
+         mouth_mean = Mouth.mean,
+         torso_mean = Torso.mean,
+         max_action = Max_strength.action) |> 
+  mutate(word = str_to_lower(word))
+```
+
+Merge with main data:
+
+```{r}
+df <- left_join(df,
+                select(lanc, word, dominant_modality, dominant_action,
+                       auditory_strength, visual_strength, haptic_strength,
+                       gustatory_strength, olfactory_strength,
+                       hand_arm_mean, foot_leg_mean, mouth_mean, torso_mean, head_mean,
+                       max_strength, max_action))
+```
+
+Merge with proportion table:
+
+```{r}
+by_word_all <- left_join(by_word_all,
+                         select(lanc, word, dominant_modality, dominant_action,
+                                auditory_strength, visual_strength, haptic_strength,
+                                gustatory_strength, olfactory_strength,
+                                max_strength, max_action))
+
+# Save outside of R:
+
+by_word_all |> 
+  write_csv('../data/by_word_proportions_with_modality.csv')
+```
+
+Which words are classified how?
+
+```{r}
+select(by_word_all,
+       word, type, dominant_modality, dominant_action) |> 
+  print(n = Inf)
+```
+
+## Descriptive statistics & data visualization
+
+Descriptive averages by dominant modality, also with counts:
+
+```{r}
+# Create count table:
+
+modality_type_counts <- by_word_all |>
+  count(type, dominant_modality)
+
+# Create descriptive averages and merge with counts:
+
+by_word_all |> 
+  group_by(type, dominant_modality) |> 
+  summarize(M_gesture = mean(gesture_proportion),
+            M_iconic = mean(iconic_gesture_proportion),
+            M_other = mean(other_proportion)) |> 
+  left_join(modality_type_counts)
+```
+
+Clearly shows that visual words have the highest gesture rate, regardless of whether they are iconic or not, and for iconic words, haptic, visual, and auditory words have higher gesture rates than gustatory ones, although there's only two of those, so we have to be careful not to over-interpret this as it very much hinges on these specific iconic words chosen. This data sparsity issue is only a concern with the categorical modality labels however, as of course the continuous ratings exist for all words.
+
+Descriptive averages by dominant action:
+
+```{r}
+# Create count table:
+
+action_type_counts <- by_word_all |>
+  count(type, dominant_action)
+
+# Create descriptive averages and merge with counts:
+
+by_word_all |> 
+  group_by(type, dominant_action) |> 
+  summarize(M_gesture = mean(gesture_proportion),
+            M_iconic = mean(iconic_gesture_proportion),
+            M_other = mean(other_proportion)) |> 
+  left_join(action_type_counts)
+```
+
+There's only two foot/leg words, so we shouldn't really interpret that. For iconic words, the action ratings don't seem to matter as much as the modality, with `Mouth` a bit lower.
+
+Plot proportions as a function of `auditory_strength` and the other perceptual measures. We'll use a facet wrap for this and so for that, it would make sense to have all the strength measures in long format, with an indicator variable saying what strength it is:
+
+```{r}
+by_word_long <- by_word_all |> 
+  select(type, word, gesture_proportion, iconic_gesture_proportion, other_proportion,
+         auditory_strength:olfactory_strength) |> 
+  pivot_longer(cols = auditory_strength:olfactory_strength,
+               names_to = 'modality',
+               values_to = 'strength')
+
+# Show a few random rows:
+
+by_word_long |> 
+  sample_n(10)
+```
+
+Make a plot out of this, for overall gesture proportion:
+
+```{r}
+# Plot basics:
+
+modality_p <- by_word_long |> 
+  ggplot(aes(x = strength, y = gesture_proportion, col = type)) +
+  geom_smooth(method = 'lm') +
+  geom_point()
+
+# Axis and labels:
+
+modality_p <- modality_p +
+  ylab('Gesture proportion') +
+  xlab('Perceptual strength rating') +
+  scale_color_manual(values = c('steelblue', 'goldenrod3')) +
+  facet_wrap(~modality)
+
+# Look and feel:
+
+modality_p <- modality_p +
+  theme_classic() +
+  theme(legend.position = 'bottom')
+
+# Show and save:
+
+modality_p
+ggsave(plot = modality_p,
+       filename = '../figures/modality_scatterplot_matrix.pdf',
+       width = 12, height = 6)
+```
+
+Same for iconic gesture proportion:
+
+```{r}
+# Plot basics:
+
+modality_iconicity_p <- by_word_long |> 
+  ggplot(aes(x = strength, y = iconic_gesture_proportion,
+             col = type)) +
+  geom_smooth(method = 'lm') +
+  geom_point() +
+  facet_wrap(~modality)
+
+# Axis and labels:
+
+modality_iconicity_p <- modality_iconicity_p +
+  ylab('Gesture proportion') +
+  xlab('Perceptual strength rating') +
+  scale_color_manual(values = c('steelblue', 'goldenrod3'))
+
+# Look and feel:
+
+modality_iconicity_p <- modality_iconicity_p +
+  theme_classic() +
+  theme(legend.position = 'bottom')
+
+# Show and save:
+
+modality_iconicity_p
+ggsave(plot = modality_iconicity_p,
+       filename = '../figures/modality_scatterplot_matrix_iconic_gestures.pdf',
+       width = 12, height = 6)
+```
+
+Do the same but a single scatterplot with *just* the max strength, and then the max action.
+
+Make a plot out of this, for overall gesture proportion:
+
+```{r}
+# Plot basics:
+
+modality_p <- by_word_all |> 
+  ggplot(aes(x = max_strength, y = gesture_proportion,
+             col = type, label = word)) +
+  geom_smooth(method = 'lm') +
+  geom_text()
+
+# Axis and labels:
+
+modality_p <- modality_p +
+  ylab('Gesture proportion') +
+  xlab('Max perceptual strength rating') +
+  scale_color_manual(values = c('steelblue', 'goldenrod3'))
+
+# Look and feel:
+
+modality_p <- modality_p +
+  theme_classic() +
+  theme(legend.position = 'bottom')
+
+# Show and save:
+
+modality_p
+ggsave(plot = modality_p,
+       filename = '../figures/max_strength_scatterplot.pdf',
+       width = 6.5, height = 4.5)
+```
+
+Not necessarily what one would expect, but pretty much anything is compatible with this data since the confidence regions are so wide.
+
+Same for iconic gesture proportion:
+
+```{r}
+# Plot basics:
+
+modality_p <- by_word_all |> 
+  ggplot(aes(x = max_strength, y = iconic_gesture_proportion,
+             col = type, label = word)) +
+  geom_smooth(method = 'lm') +
+  geom_text()
+
+# Axis and labels:
+
+modality_p <- modality_p +
+  ylab('Iconic gesture proportion') +
+  xlab('Max perceptual strength rating') +
+  scale_color_manual(values = c('steelblue', 'goldenrod3'))
+
+# Look and feel:
+
+modality_p <- modality_p +
+  theme_classic() +
+  theme(legend.position = 'bottom')
+
+# Show and save:
+
+modality_p
+ggsave(plot = modality_p,
+       filename = '../figures/max_strength_scatterplot_iconic_gestures.pdf',
+       width = 6.5, height = 4.5)
+```
+
+This looks like it's more the specific affordances of the verb semantics in terms of iconicity than anything in relation to how much sensory content there is overall.
+
+Same with action strength:
+
+Make a plot out of this, for overall gesture proportion:
+
+```{r}
+# Plot basics:
+
+action_p <- by_word_all |> 
+  ggplot(aes(x = max_action, y = gesture_proportion,
+             col = type, label = word)) +
+  geom_smooth(method = 'lm') +
+  geom_text()
+
+# Axis and labels:
+
+action_p <- action_p +
+  ylab('Gesture proportion') +
+  xlab('Max motor strength rating') +
+  scale_color_manual(values = c('steelblue', 'goldenrod3'))
+
+# Look and feel:
+
+action_p <- action_p +
+  theme_classic() +
+  theme(legend.position = 'bottom')
+
+# Show and save:
+
+action_p
+ggsave(plot = action_p,
+       filename = '../figures/max_action_scatterplot.pdf',
+       width = 6.5, height = 4.5)
+```
+
+Nothing much going on.
+
+Same for iconic gesture proportion:
+
+```{r}
+# Plot basics:
+
+action_p <- by_word_all |> 
+  ggplot(aes(x = max_action, y = iconic_gesture_proportion,
+             col = type, label = word)) +
+  geom_smooth(method = 'lm') +
+  geom_text()
+
+# Axis and labels:
+
+action_p <- action_p +
+  ylab('Iconic gesture proportion') +
+  xlab('Max action strength rating') +
+  scale_color_manual(values = c('steelblue', 'goldenrod3'))
+
+# Look and feel:
+
+action_p <- action_p +
+  theme_classic() +
+  theme(legend.position = 'bottom')
+
+# Show and save:
+
+action_p
+ggsave(plot = action_p,
+       filename = '../figures/max_action_scatterplot_iconic_gestures.pdf',
+       width = 6.5, height = 4.5)
+```
+
+## Build models: max sensorimotor strength ones
+
+Model with max perceptual strength, action strength, and iconicity:
+
+```{r eval = FALSE}
+gesture_mod_mdl <- brm(gesture ~
+                     
+                     # Fixed effects:
+                     
+                     1 + type + max_strength + max_action + 
+                     
+                     # Random effects:
+                     
+                     (1|word) + (1|url),
+                   
+                   # More model specs:
+                   
+                   prior = weak_priors,
+                   family = bernoulli,
+                   data = df,
+                   
+                   # MCMC estimation specs:
+                   
+                   seed = 42, cores = 4,
+                   iter = 4000, warmup = 2000)
+
+# Save:
+
+save(gesture_mod_mdl, file = '../models/gesture_mod_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load:
+
+load('../models/gesture_mod_mdl.Rdata')
+
+# Show:
+
+gesture_mod_mdl
+```
+
+This is to calculate the actual posterior probability of the effect being positive (= of the same sign), which is essentially just pinning a number to what proportion of the area in the distribution above is to the right of the dashed line.
+
+```{r}
+hypothesis(gesture_mod_mdl, 'typeiconic > 0')
+hypothesis(gesture_mod_mdl, 'max_strength < 0')
+hypothesis(gesture_mod_mdl, 'max_action > 0')
+```
+
+Same for iconic gestures:
+
+```{r eval = FALSE}
+iconic_mod_mdl <- brm(iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + type + max_strength + max_action + 
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = df,
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(iconic_mod_mdl, file = '../models/iconic_mod_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/iconic_mod_mdl.RData')
+
+# Show model:
+
+iconic_mod_mdl
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(iconic_mod_mdl, 'typeiconic > 0')
+hypothesis(iconic_mod_mdl, 'max_strength > 0')
+hypothesis(iconic_mod_mdl, 'max_action > 0')
+```
+
+The final model is the one with only the non-iconic gestures:
+
+Same for non-iconic (= "other") gestures:
+
+```{r eval = FALSE}
+other_mod_mdl <- brm(non_iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + type + max_strength + max_action + 
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = filter(df, !is.na(non_iconic_gesture)),
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(other_mod_mdl, file = '../models/other_mod_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/other_mod_mdl.RData')
+
+# Show model:
+
+other_mod_mdl
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(other_mod_mdl, 'typeiconic < 0')
+hypothesis(other_mod_mdl, 'max_strength > 0')
+hypothesis(other_mod_mdl, 'max_action > 0')
+```
+
+## Build models: all perceptual variables
+
+Model with all other variables:
+
+```{r eval = FALSE}
+gesture_all_senses_mdl <- brm(gesture ~
+                     
+                     # Fixed effects:
+                     
+                     1 + auditory_strength +
+                       visual_strength +
+                       haptic_strength +
+                       gustatory_strength +
+                       olfactory_strength +
+                     
+                     # Random effects:
+                     
+                     (1|word) + (1|url),
+                   
+                   # More model specs:
+                   
+                   prior = weak_priors,
+                   family = bernoulli,
+                   data = df,
+                   
+                   # MCMC estimation specs:
+                   
+                   seed = 42, cores = 4,
+                   iter = 4000, warmup = 2000)
+
+# Save:
+
+save(gesture_all_senses_mdl, file = '../models/gesture_all_senses_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load:
+
+load('../models/gesture_all_senses_mdl.Rdata')
+
+# Show:
+
+gesture_all_senses_mdl
+```
+
+This is to calculate the actual posterior probability of the effect being positive (= of the same sign), which is essentially just pinning a number to what proportion of the area in the distribution above is to the right of the dashed line.
+
+```{r}
+hypothesis(gesture_all_senses_mdl, 'auditory_strength > 0')
+hypothesis(gesture_all_senses_mdl, 'visual_strength > 0')
+hypothesis(gesture_all_senses_mdl, 'haptic_strength > 0')
+hypothesis(gesture_all_senses_mdl, 'gustatory_strength < 0')
+hypothesis(gesture_all_senses_mdl, 'olfactory_strength < 0')
+```
+
+Same for iconic gestures:
+
+```{r eval = FALSE}
+iconic_all_senses_mdl <- brm(iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + auditory_strength +
+                       visual_strength +
+                       haptic_strength +
+                       gustatory_strength +
+                       olfactory_strength +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = df,
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(iconic_all_senses_mdl, file = '../models/iconic_all_senses_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/iconic_all_senses_mdl.RData')
+
+# Show model:
+
+iconic_all_senses_mdl
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(iconic_all_senses_mdl, 'auditory_strength > 0')
+hypothesis(iconic_all_senses_mdl, 'visual_strength > 0')
+hypothesis(iconic_all_senses_mdl, 'haptic_strength > 0')
+hypothesis(iconic_all_senses_mdl, 'gustatory_strength < 0')
+hypothesis(iconic_all_senses_mdl, 'olfactory_strength > 0')
+```
+
+The final model is the one with only the non-iconic gestures:
+
+Same for non-iconic (= "other") gestures:
+
+```{r eval = FALSE}
+other_all_senses_mdl <- brm(non_iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + auditory_strength +
+                       visual_strength +
+                       haptic_strength +
+                       gustatory_strength +
+                       olfactory_strength +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = filter(df, !is.na(non_iconic_gesture)),
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(other_all_senses_mdl, file = '../models/other_all_senses_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/other_all_senses_mdl.RData')
+
+# Show model:
+
+other_all_senses_mdl
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(other_all_senses_mdl, 'auditory_strength > 0')
+hypothesis(other_all_senses_mdl, 'visual_strength < 0')
+hypothesis(other_all_senses_mdl, 'haptic_strength < 0')
+hypothesis(other_all_senses_mdl, 'gustatory_strength < 0')
+hypothesis(other_all_senses_mdl, 'olfactory_strength > 0')
+```
+
+## Build models: all motor variables
+
+Model with all other variables:
+
+```{r eval = FALSE}
+gesture_all_motor_mdl <- brm(gesture ~
+                     
+                     # Fixed effects:
+                     
+                     1 + hand_arm_mean +
+                      head_mean +
+                      foot_leg_mean +
+                      mouth_mean +
+                      torso_mean +
+                     
+                     # Random effects:
+                     
+                     (1|word) + (1|url),
+                   
+                   # More model specs:
+                   
+                   prior = weak_priors,
+                   family = bernoulli,
+                   data = df,
+                   
+                   # MCMC estimation specs:
+                   
+                   seed = 42, cores = 4,
+                   iter = 4000, warmup = 2000)
+
+# Save:
+
+save(gesture_all_motor_mdl, file = '../models/gesture_all_motor_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load:
+
+load('../models/gesture_all_motor_mdl.Rdata')
+
+# Show:
+
+gesture_all_motor_mdl
+```
+
+This is to calculate the actual posterior probability of the effect being positive (= of the same sign), which is essentially just pinning a number to what proportion of the area in the distribution above is to the right of the dashed line.
+
+```{r}
+hypothesis(gesture_all_motor_mdl, 'hand_arm_mean > 0')
+hypothesis(gesture_all_motor_mdl, 'head_mean < 0')
+hypothesis(gesture_all_motor_mdl, 'foot_leg_mean > 0')
+hypothesis(gesture_all_motor_mdl, 'torso_mean < 0')
+hypothesis(gesture_all_motor_mdl, 'mouth_mean < 0')
+```
+
+Same for iconic gestures:
+
+```{r eval = FALSE}
+iconic_all_motor_mdl <- brm(iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + hand_arm_mean +
+                      head_mean +
+                      foot_leg_mean +
+                      mouth_mean +
+                      torso_mean +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = df,
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(iconic_all_motor_mdl, file = '../models/iconic_all_motor_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/iconic_all_motor_mdl.RData')
+
+# Show model:
+
+iconic_all_motor_mdl
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(iconic_all_motor_mdl, 'hand_arm_mean > 0')
+hypothesis(iconic_all_motor_mdl, 'head_mean < 0')
+hypothesis(iconic_all_motor_mdl, 'foot_leg_mean > 0')
+hypothesis(iconic_all_motor_mdl, 'mouth_mean < 0')
+hypothesis(iconic_all_motor_mdl, 'torso_mean < 0')
+```
+
+The final model is the one with only the non-iconic gestures:
+
+Same for non-iconic (= "other") gestures:
+
+```{r eval = FALSE}
+other_all_motor_mdl <- brm(non_iconic_gesture ~
+                    
+                    # Fixed effects:
+                    
+                    1 + hand_arm_mean +
+                      head_mean +
+                      foot_leg_mean +
+                      mouth_mean +
+                      torso_mean +
+                    
+                    # Random effects:
+                    
+                    (1|word) + (1|url),
+                   
+                  # More model specs:
+                   
+                  prior = weak_priors,
+                  family = bernoulli,
+                  data = filter(df, !is.na(non_iconic_gesture)),
+                   
+                  # MCMC estimation specs:
+                  
+                  seed = 42, cores = 4,
+                  iter = 4000, warmup = 2000)
+
+# Save:
+
+save(other_all_motor_mdl, file = '../models/other_all_motor_mdl.RData')
+```
+
+Load and show model:
+
+```{r}
+# Load model:
+
+load('../models/other_all_motor_mdl.RData')
+
+# Show model:
+
+other_all_motor_mdl
+```
+
+Check how many of them are of the same sign:
+
+```{r}
+hypothesis(other_all_motor_mdl, 'hand_arm_mean < 0')
+hypothesis(other_all_motor_mdl, 'head_mean > 0')
+hypothesis(other_all_motor_mdl, 'foot_leg_mean > 0')
+hypothesis(other_all_motor_mdl, 'mouth_mean > 0')
+hypothesis(other_all_motor_mdl, 'torso_mean > 0')
+```
+
+## R-squared comparisons between models
+
+First, let's see how for all gestures, the iconicity model competes against the all sensory strength and all motor strength model:
+
+```{r}
+bayes_R2(gesture_mdl)
+bayes_R2(gesture_all_senses_mdl)
+bayes_R2(gesture_all_motor_mdl)
+```
+
+Next, same thing for iconic gestures only:
+
+```{r}
+bayes_R2(iconic_mdl)
+bayes_R2(iconic_all_senses_mdl)
+bayes_R2(iconic_all_motor_mdl)
+```
+
+Then for all other gestures:
+
+```{r}
+bayes_R2(other_mdl)
+bayes_R2(other_all_senses_mdl)
+bayes_R2(other_all_motor_mdl)
+```
+
+This completes this analysis.
