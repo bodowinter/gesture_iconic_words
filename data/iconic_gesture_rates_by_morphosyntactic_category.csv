@@ -1,0 +1,15 @@
+"category","level","high gesture","moderate gesture"
+"POS","adjective",68,0
+"POS","interjection",89,67
+"POS","verb",85,16
+"POS","noun",NA,0
+"morph","Y",80,27
+"morph","N",73,34
+"quot","Y",50,50
+"quot","N",80,26
+"position","embedded",57,17
+"position","left_edge_only",83,0
+"position","right_edge_only",83,0
+"position","isolated",83,69
+"repetition","Y",89,67
+"repetition","N",76,19
